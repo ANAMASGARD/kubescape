@@ -2,6 +2,7 @@ package v1
 
 import (
 	"context"
+	"encoding/json"
 	"errors"
 	"fmt"
 	"net/http"
@@ -147,6 +148,14 @@ func configuredPositiveInt64(name string, defaultValue int64) int64 {
 }
 
 // ============================================== STATUS ========================================================
+type statusResponse struct {
+	ID       string                       `json:"id"`
+	Type     utilsapisv1.ScanResponseType `json:"type"`
+	Response string                       `json:"response,omitempty"`
+	Outcome  scanOutcome                  `json:"outcome,omitempty"`
+	Error    string                       `json:"error,omitempty"`
+}
+
 // Status API
 func (handler *HTTPHandler) Status(w http.ResponseWriter, r *http.Request) {
 	defer handler.recover(r.Context(), w, "")
@@ -156,7 +165,7 @@ func (handler *HTTPHandler) Status(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	response := utilsmetav1.Response{}
+	response := statusResponse{}
 	w.Header().Set("Content-Type", "application/json")
 
 	statusQueryParams := &StatusQueryParams{}
@@ -175,20 +184,23 @@ func (handler *HTTPHandler) Status(w http.ResponseWriter, r *http.Request) {
 		scanID = handler.state.getLatestUserScanID()
 	}
 
+	busy, terminal := handler.state.status(scanID)
+	response.ID = scanID
 	w.WriteHeader(http.StatusOK)
-	if scanID == "" || !handler.state.isBusy(scanID) {
+	if !busy {
 		response.Type = utilsapisv1.NotBusyScanResponseType
+		response.Outcome = terminal.outcome
+		response.Error = terminal.err
 		logger.L().Debug("status: not busy", helpers.String("ID", scanID))
-		w.Write(responseToBytes(&response))
+		_ = json.NewEncoder(w).Encode(response)
 		return
 	}
 
 	response.Response = scanID
-	response.ID = scanID
 	response.Type = utilsapisv1.BusyScanResponseType
 
 	logger.L().Debug("status: busy", helpers.String("ID", scanID))
-	w.Write(responseToBytes(&response))
+	_ = json.NewEncoder(w).Encode(response)
 }
 
 // ============================================== SCAN ========================================================
@@ -479,8 +491,9 @@ func (handler *HTTPHandler) Ready(w http.ResponseWriter, r *http.Request) {
 func (handler *HTTPHandler) recover(ctx context.Context, w http.ResponseWriter, scanID string) {
 	response := utilsmetav1.Response{}
 	if err := recover(); err != nil {
-		handler.state.setNotBusy(scanID)
-		logger.L().Ctx(ctx).Error("recover", helpers.Error(fmt.Errorf("%v", err)))
+		// An accepted scan may still be running in the worker. Only that worker
+		// can publish its terminal outcome and remove the busy entry.
+		logger.L().Ctx(ctx).Error("recover", helpers.String("ID", scanID), helpers.Error(fmt.Errorf("%v", err)))
 		w.WriteHeader(http.StatusInternalServerError)
 		response.Response = fmt.Sprintf("%v", err)
 		response.Type = utilsapisv1.ErrorScanResponseType

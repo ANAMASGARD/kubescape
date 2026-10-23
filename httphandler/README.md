@@ -138,7 +138,7 @@ Check if a scan is still in progress. Useful for polling without retrieving full
 
 | Parameter | Type | Default | Description |
 |-----------|------|---------|-------------|
-| `id` | string | - | Scan ID. If empty, checks if any scan is in progress |
+| `id` | string | - | Scan ID. If empty, checks the latest accepted `/v1/scan` request |
 
 **Response (in progress):**
 
@@ -146,19 +146,30 @@ Check if a scan is still in progress. Useful for polling without retrieving full
 {
   "id": "scan-12345",
   "type": "busy",
-  "response": "scanning in progress"
+  "response": "scan-12345"
 }
 ```
 
-**Response (complete):**
+**Response (successful):**
 
 ```json
 {
   "id": "scan-12345",
   "type": "notBusy",
-  "response": "scanning completed"
+  "outcome": "succeeded"
 }
 ```
+
+For a finished scan, `outcome` is `succeeded`, `failed`, or `cancelled`.
+Failed and cancelled scans also include a short, generic `error` message.
+`type` remains `notBusy` for all terminal outcomes, so clients must check
+`outcome` before treating a scan as successful. An unknown ID, an evicted
+outcome, or a scan from before a server restart returns `outcome: "unknown"`
+with `type: "notBusy"`; it must not be treated as success. The server retains
+the most recent 1,024 user scan outcomes in memory. A busy scan omits `outcome`.
+`succeeded` means the scanner execution returned without an error. It does not
+confirm downstream Storage persistence or an orphan-record sweep; those failures
+are logged separately and do not fail the scan.
 
 ---
 

@@ -12,6 +12,22 @@ var (
 	errScanQueueFull = errors.New("scan queue is full; retry the request later")
 )
 
+const terminalOutcomeLimit = 1024
+
+type scanOutcome string
+
+const (
+	scanSucceeded scanOutcome = "succeeded"
+	scanFailed    scanOutcome = "failed"
+	scanCancelled scanOutcome = "cancelled"
+	scanUnknown   scanOutcome = "unknown"
+)
+
+type terminalScan struct {
+	outcome scanOutcome
+	err     string
+}
+
 type scanEntry struct {
 	cancel    context.CancelFunc
 	cancelled bool
@@ -20,10 +36,26 @@ type scanEntry struct {
 type serverState struct {
 	shuttingDown      bool
 	statusID          map[string]*scanEntry
+	terminal          map[string]terminalScan
+	terminalOrder     []string
 	latestID          string
 	latestUserScanID  string
 	runningUserScanID string
 	mtx               sync.RWMutex
+}
+
+// status returns the running state and terminal outcome from one snapshot.
+// A caller must never see notBusy before its terminal outcome is recorded.
+func (s *serverState) status(id string) (bool, terminalScan) {
+	s.mtx.RLock()
+	defer s.mtx.RUnlock()
+	if _, busy := s.statusID[id]; busy {
+		return true, terminalScan{}
+	}
+	if terminal, ok := s.terminal[id]; ok {
+		return false, terminal
+	}
+	return false, terminalScan{outcome: scanUnknown}
 }
 
 // isBusy is server busy with ID, if id is empty will check for latest ID
@@ -94,6 +126,29 @@ func (s *serverState) setNotBusy(id string) {
 		s.runningUserScanID = ""
 	}
 	s.mtx.Unlock()
+}
+
+// finishScan publishes the terminal outcome in the same critical section that
+// removes busy state. Only user scans are retained; metrics scrapes must not
+// evict user scan outcomes.
+func (s *serverState) finishScan(id string, userScan bool, terminal terminalScan) {
+	s.mtx.Lock()
+	defer s.mtx.Unlock()
+	if userScan {
+		if _, exists := s.terminal[id]; !exists {
+			if len(s.terminalOrder) == terminalOutcomeLimit {
+				delete(s.terminal, s.terminalOrder[0])
+				copy(s.terminalOrder, s.terminalOrder[1:])
+				s.terminalOrder = s.terminalOrder[:len(s.terminalOrder)-1]
+			}
+			s.terminalOrder = append(s.terminalOrder, id)
+		}
+		s.terminal[id] = terminal
+	}
+	delete(s.statusID, id)
+	if s.runningUserScanID == id {
+		s.runningUserScanID = ""
+	}
 }
 
 func (s *serverState) getLatestID() string {
@@ -209,6 +264,7 @@ func (s *serverState) isCancelled(id string) bool {
 func newServerState() *serverState {
 	return &serverState{
 		statusID: make(map[string]*scanEntry),
+		terminal: make(map[string]terminalScan),
 		mtx:      sync.RWMutex{},
 	}
 }

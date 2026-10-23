@@ -152,7 +152,7 @@ func (handler *HTTPHandler) executeScan(scanReq *scanRequestParams) {
 				}
 			})
 			handler.state.releaseCancel(scanReq.scanID)
-			handler.state.setNotBusy(scanReq.scanID)
+			handler.state.finishScan(scanReq.scanID, scanReq.isUserScan, terminalScan{outcome: scanFailed, err: "scan panicked"})
 			response.Type = utilsapisv1.ErrorScanResponseType
 			response.Response = responseMsg
 			feedPanicResponse(scanReq, response)
@@ -166,8 +166,10 @@ func (handler *HTTPHandler) executeScan(scanReq *scanRequestParams) {
 		scanCtx = withCanonicalResultPersistence(scanCtx)
 	}
 	_, err := scanImpl(scanCtx, scanReq.scanInfo, scanReq.policyIdentifiers, scanReq.scanID, scanReq.scanQueryParams.SkipPersistence)
+	terminal := terminalScan{outcome: scanSucceeded}
 	if err != nil {
 		if errors.Is(scanReq.ctx.Err(), context.Canceled) {
+			terminal = terminalScan{outcome: scanCancelled, err: "scan cancelled"}
 			logger.L().Ctx(scanReq.ctx).Info("scan cancelled", helpers.String("ID", scanReq.scanID))
 			removeResultsFile(scanReq.scanID)
 			if scanReq.scanQueryParams.ReturnResults {
@@ -175,6 +177,7 @@ func (handler *HTTPHandler) executeScan(scanReq *scanRequestParams) {
 				response.Response = fmt.Sprintf("scan '%s' was cancelled", scanReq.scanID)
 			}
 		} else {
+			terminal = terminalScan{outcome: scanFailed, err: "scan failed"}
 			logger.L().Ctx(scanReq.ctx).Error("scanning failed", helpers.String("ID", scanReq.scanID), helpers.Error(err))
 			if scanReq.scanQueryParams.ReturnResults {
 				response.Type = utilsapisv1.ErrorScanResponseType
@@ -189,7 +192,7 @@ func (handler *HTTPHandler) executeScan(scanReq *scanRequestParams) {
 	}
 
 	handler.state.releaseCancel(scanReq.scanID)
-	handler.state.setNotBusy(scanReq.scanID)
+	handler.state.finishScan(scanReq.scanID, scanReq.isUserScan, terminal)
 
 	// return results, if someone's waiting for them; never block.
 	feedScanResponse(scanReq, response)
@@ -223,7 +226,7 @@ func (handler *HTTPHandler) watchForScan() {
 			}
 			deliverScanCallback(scanReq, callbackStatusFailed, "scan cancelled")
 			handler.state.releaseCancel(scanReq.scanID)
-			handler.state.setNotBusy(scanReq.scanID)
+			handler.state.finishScan(scanReq.scanID, scanReq.isUserScan, terminalScan{outcome: scanCancelled, err: "scan cancelled"})
 			continue
 		}
 		handler.executeScan(scanReq)

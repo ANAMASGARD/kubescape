@@ -338,7 +338,7 @@ paths:
       description: |-
         Returns the current status of a scan with a given ID: whether it completed or not. Intended for asynchronous scanning, so you can check when a result is ready and fetch the results.
 
-        When a scan is in progress, the response's `type` will be `busy`. When a scan is complete, `type` is `notBusy`.
+        While a scan is in progress, `type` is `busy` and `outcome` is omitted. After completion, `type` is `notBusy` and `outcome` is `succeeded`, `failed`, or `cancelled`. Unknown, evicted, and pre-restart IDs return `outcome: unknown`; do not infer success from `notBusy` alone. The last 1024 user scan outcomes are retained in memory. Failed and cancelled outcomes may include a generic `error` message. `succeeded` means the scanner returned without an error; downstream Storage persistence and orphan-record sweeping are best effort and not included in this outcome.
       operationId: getStatus
       parameters:
       - description: ID of the scan to check
@@ -349,7 +349,33 @@ paths:
         x-go-name: ScanID
       responses:
         "200":
-          $ref: '#/responses/scanResponse'
+          description: Scan status with terminal outcome when known
+          schema:
+            type: object
+            properties:
+              id:
+                description: Requested or resolved user scan ID
+                type: string
+              type:
+                description: Busy state, retained for existing clients
+                enum:
+                - busy
+                - notBusy
+                type: string
+              response:
+                description: Scan ID while busy
+                type: string
+              outcome:
+                description: Terminal result; omitted while busy
+                enum:
+                - succeeded
+                - failed
+                - cancelled
+                - unknown
+                type: string
+              error:
+                description: Generic failure or cancellation reason, when present
+                type: string
         "400":
           $ref: '#/responses/scanResponseBadRequest'
       summary: Returns a scan’s status
