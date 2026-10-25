@@ -5,6 +5,7 @@ import (
 	"errors"
 	"fmt"
 	"maps"
+	"os"
 	"path/filepath"
 	"strings"
 
@@ -35,7 +36,7 @@ func (fileHandler *FileResourceHandler) GetResources(ctx context.Context, sessio
 	logger.L().Start("Accessing local objects...")
 
 	// load resources from all input paths
-	mappedResources := map[string][]workloadinterface.IMetadata{}
+	var batches []fileResourceBatch
 	for path := range scanInfo.InputPatterns {
 		var workloadIDToSource map[string]reporthandling.Source
 		var workloads []workloadinterface.IMetadata
@@ -61,14 +62,19 @@ func (fileHandler *FileResourceHandler) GetResources(ctx context.Context, sessio
 			continue
 		}
 
-		maps.Copy(sessionObj.ResourceSource, workloadIDToSource)
-
-		// map all resources: map["/apiVersion/version/kind"][]<k8s workloads>
-		addWorkloadsToResourcesMap(mappedResources, workloads)
+		batches = append(batches, fileResourceBatch{
+			input: scanInfo.InputPatterns[path], workloads: workloads, sources: workloadIDToSource,
+		})
 	}
+	workloads, sources, err := mergeFileResourceBatches(batches)
+	if err != nil {
+		return nil, nil, nil, nil, err
+	}
+	maps.Copy(sessionObj.ResourceSource, sources)
+	mappedResources := map[string][]workloadinterface.IMetadata{}
+	addWorkloadsToResourcesMap(mappedResources, workloads)
 
 	// locate input k8s object in the mapped resources - if not found or not a valid resource, return error
-	var err error
 	if sessionObj.SingleResourceScan, err = findScanObjectResource(mappedResources, scanInfo.ScanObject); err != nil {
 		return nil, nil, nil, nil, err
 	}
@@ -352,7 +358,7 @@ func getResourcesFromPath(ctx context.Context, path string, helmValueOpts cautil
 
 	// when scanning a single file, we consider the repository root to be
 	// the directory of the scanned file
-	if cautils.IsYaml(repoRoot) {
+	if info, err := os.Stat(repoRoot); err == nil && info.Mode().IsRegular() {
 		repoRoot = filepath.Dir(repoRoot)
 	}
 

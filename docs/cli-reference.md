@@ -29,8 +29,18 @@ kubescape scan [target] [flags]
 ### Target Types
 
 - No target: Scans the current cluster
-- Path: Scans local YAML files, Helm charts, or Kustomize directories
+- Path: Scans local YAML or JSON files, Helm charts, or Kustomize directories
 - URL: Scans a Git repository
+
+Plain YAML and JSON files from different local inputs, such as
+`kubescape scan prod/ dev/`, are scanned independently even when filenames and
+Kubernetes identities match; repeated inputs count the same file only once.
+Reports preserve each file's original source root and relative path for locating
+and fixing it. With different local roots,
+resource IDs and exception paths use paths relative to their common ancestor
+(absolute paths when no common root exists). Existing valid single-root IDs remain
+unchanged. Standalone JSON inputs now use their containing directory as the source
+root. Regenerate affected path-scoped exception baselines after upgrading.
 
 ### Flags
 

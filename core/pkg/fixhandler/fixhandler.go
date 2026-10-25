@@ -390,11 +390,26 @@ func (h *FixHandler) localManifest(resource *reporthandling.Resource) (root, rel
 	if resource == nil {
 		return "", "", false
 	}
-	relativePath, _, err := h.getFilePathAndIndex(h.getPathFromRawResource(resource.GetObject()))
+	relativePath, _, err := h.manifestPathAndIndex(resource)
 	if err != nil {
 		return "", "", false
 	}
 	return filepath.Clean(h.resourceBasePath(resource)), relativePath, true
+}
+
+// sourcePath identifies the document across all scan inputs. In a multi-root
+// scan its filename can differ from the path relative to this resource's own
+// root. Prefer recorded provenance for file access, retaining the document
+// index and the legacy filename fallback for reports without RelativePath.
+func (h *FixHandler) manifestPathAndIndex(resource *reporthandling.Resource) (string, int, error) {
+	path, index, err := h.getFilePathAndIndex(h.getPathFromRawResource(resource.GetObject()))
+	if err != nil {
+		return "", 0, err
+	}
+	if resource.Source != nil && isFixableSourceType(resource.Source.FileType) && resource.Source.RelativePath != "" {
+		path = resource.Source.RelativePath
+	}
+	return path, index, nil
 }
 
 // scanRoots returns the distinct roots the report's manifests were read from,
@@ -744,7 +759,7 @@ func (h *FixHandler) resolveResourceSource(ctx context.Context, resourceObj *rep
 		return src
 	}
 
-	relativePath, idx, err := h.getFilePathAndIndex(src.reportedPath)
+	relativePath, idx, err := h.manifestPathAndIndex(resourceObj)
 	if err != nil {
 		logger.L().Ctx(ctx).Warning("Skipping invalid resource path: " + sanitizeForLog(src.reportedPath))
 		src.skipReason = "skipped: invalid resource path"
